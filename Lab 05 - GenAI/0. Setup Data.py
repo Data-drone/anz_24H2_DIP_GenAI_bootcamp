@@ -2,25 +2,52 @@
 # MAGIC %md
 # MAGIC # Setting up Our Data Source
 # MAGIC
-# MAGIC This notebook is to be run by the instructor only to load documents and setup the lab utilities
-
-# COMMAND ----------
-
-# last tested with 0.23 of the databricks-vectorsearch client
-%pip install --upgrade --force-reinstall databricks-vectorsearch
-dbutils.library.restartPython()
-
-# COMMAND ----------
-
-# MAGIC %run ./prereqs
+# MAGIC This notebook helps to setup your datasets
+# MAGIC
+# MAGIC You can load your own files via the UI or you can use code to load some for you.
+# MAGIC
+# MAGIC 
 
 # COMMAND ----------
 
 # DBTITLE 1,Configuration Parameters
-db_catalog = username
-db_schema = 'lab_05'
-volume_name = 'source_files'
 
+# extract current username
+username = spark.sql("SELECT current_user()").first()['current_user()'].replace('@vocareum.com','')
+
+
+######### Edit these to customise location
+db_catalog = username
+db_schema = 'rag_ai_app'
+volume_name = 'source_files'
+##########################################
+
+# Get the workspace url to make a shortcuts
+from dbruntime.databricks_repl_context import get_context
+ctx = get_context()
+volume_folder = f'/Volumes/{db_catalog}/{db_schema}/{volume_name}/'
+vol_url = "https://{ctx.browserHostName}explore/data/volumes/{db_catalog}/{db_schema}/{volume_name}"
+
+# COMMAND ----------
+
+# DBTITLE 1,Setup Catalog and Schema
+spark.sql(f"CREATE CATALOG IF NOT EXISTS {db_catalog}")
+spark.sql(f"CREATE SCHEMA IF NOT EXISTS {db_catalog}.{db_schema}")
+spark.sql(f"CREATE VOLUME IF NOT EXISTS {db_catalog}.{db_schema}.{volume_name}")
+
+print(f"Load files manually with this link: {vol_url}")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC # Load Files with Code
+# MAGIC
+# MAGIC If you don't have any pdfs that you want to load manually then you can use this code to load some \
+# MAGIC Just uncomment the last cell. 
+
+# COMMAND ----------
+
+# DBTITLE 1,Files to Load
 # docs to load
 pdfs = {'2203.02155.pdf':'https://arxiv.org/pdf/2203.02155.pdf',
         '2302.09419.pdf': 'https://arxiv.org/pdf/2302.09419.pdf',
@@ -36,17 +63,7 @@ pdfs = {'2203.02155.pdf':'https://arxiv.org/pdf/2203.02155.pdf',
 
 # COMMAND ----------
 
-# DBTITLE 1,Setting up sample data sources
-# We will use UC Volumes for this
-
-spark.sql(f"CREATE CATALOG IF NOT EXISTS {db_catalog}")
-spark.sql(f"CREATE SCHEMA IF NOT EXISTS {db_catalog}.{db_schema}")
-spark.sql(f"CREATE VOLUME IF NOT EXISTS {db_catalog}.{db_schema}.{volume_name}")
-
-volume_folder = f'/Volumes/{db_catalog}/{db_schema}/{volume_name}/'
-
-# COMMAND ----------
-
+# DBTITLE 1,Download file script
 import os
 import requests
 user_agent = "me-me-me"
@@ -74,8 +91,14 @@ def load_file(file_uri, file_name, library_folder):
     except requests.RequestException as e:
         print("Error occurred during the request:", e)
 
-for pdf in pdfs.keys():
-    load_file(pdfs[pdf], pdf, volume_folder)
+
+# COMMAND ----------
+
+# DBTITLE 1,Download the files
+
+########## Uncomment to run (Optional)
+#for pdf in pdfs.keys():
+#    load_file(pdfs[pdf], pdf, volume_folder)
 
 
 
