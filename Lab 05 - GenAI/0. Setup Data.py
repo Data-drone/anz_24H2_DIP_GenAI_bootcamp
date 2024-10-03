@@ -1,6 +1,6 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # Setting up Training Lab
+# MAGIC # Setting up Our Data Source
 # MAGIC
 # MAGIC This notebook is to be run by the instructor only to load documents and setup the lab utilities
 
