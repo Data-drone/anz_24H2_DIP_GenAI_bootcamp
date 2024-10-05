@@ -1,160 +1,240 @@
 # Databricks notebook source
-# MAGIC %pip install --upgrade --force-reinstall databricks-vectorsearch langchain==0.1.10 sqlalchemy==2.0.27 pypdf==4.1.0 
-# MAGIC dbutils.library.restartPython()
+# MAGIC %md
+# MAGIC # Transforming files to vector indexes
+# MAGIC
+# MAGIC When building a vector index, we do not use documents as they are.\
+# MAGIC We break it up into sections or chunks. \
+# MAGIC This allows for us to do fine grained searches within the text and to locate specific paragraphs.\
+# MAGIC
 
 # COMMAND ----------
 
-# MAGIC %run ./prereqs
+# DBTITLE 1,Setup Libraries
+# MAGIC %pip install --upgrade --force-reinstall databricks-vectorsearch mlflow==2.16.2 langchain-databricks==0.1.0 pypdf==5.0.1
+# MAGIC %restart_python
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC # Setting Up Databricks Vector Search
+# MAGIC # Building Our ETL Pipeline
 # MAGIC
-# MAGIC We assume that the endpoint has been initiated already
+# MAGIC Building a chunking pipeline is just like building a standard Data Engineering Pipeline to process table data.
+# MAGIC
 
 # COMMAND ----------
 
+# DBTITLE 1,Configure Parameters
 # We will create the following source Delta table.
-source_catalog = username
-source_schema = "lab_05"
-source_volume = "source_files"
+username = spark.sql("SELECT current_user()").first()['current_user()'].replace('@vocareum.com','')
 
-source_table = "arxiv_parse"
-vs_endpoint = vs_endpoint_name
+# UC location
+source_catalog = username
+source_schema = "rag_ai_app"
+
+# table naming
+source_volume = "source_files"
+raw_table = "bronze_raw_pdfs"
+silver_table = "silver_parsed_pdfs"
+gold_table = "gold_chunked_pdfs" 
+
 embedding_endpoint_name = "databricks-gte-large-en"
 
+######### IMPORTANT
+###### You will be given a specific Vector Store Endpoint to use
+vs_endpoint = <>
+
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC # Loading Data
-
+# MAGIC # Bronze Layer - Ingestion
+# MAGIC
+# MAGIC The first step is to ingest the files into a Delta Table \
+# MAGIC Loading it into a Delta table makes it easier for users on the platform to discover the interact with the data \
+# MAGIC We will store it in bronze layer as a blob.
 # COMMAND ----------
 
+# DBTITLE 1,Loading the raw files
 # import urllib
 # file_uri = 'https://arxiv.org/pdf/2203.02155.pdf'
 volume_path = f'/Volumes/{source_catalog}/{source_schema}/{source_volume}/'
-file_path = f"{volume_path}2203.02155.pdf"
+#file_path = f"{volume_path}2203.02155.pdf"
 # urllib.request.urlretrieve(file_uri, file_path)
 
+raw_files_df = (
+    spark.read.format("binaryFile")
+    .option("recursiveFileLookup", "true")
+    .option("pathGlobFilter", f"*.pdf")
+    .load(volume_path)
+)
+
+# Save to a table
+raw_files_df.write.mode("overwrite").option("overwriteSchema", "true").saveAsTable(
+    f'{source_catalog}.{source_schema}.{raw_table}'
+)
+
+# COMMAND ----------
+
+# DBTITLE 1,Reviewing the Table
+# reload to get correct lineage in UC
+raw_files_df = spark.read.table(f'{source_catalog}.{source_schema}.{raw_table}')
+
+# For debugging, show the list of files, but hide the binary content
+display(raw_files_df.drop("content"))
+
+
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC # Create Ingestion Pipeline
+# MAGIC # Silver Layer - Parsing the files
+# MAGIC
+# MAGIC First step is to decode the file and extract the text. \
+# MAGIC Each document will get extracted into one big long string.
 
 # COMMAND ----------
 
-# 1) Chunk the documents
-from langchain_community.document_loaders import WebBaseLoader, PyPDFLoader, Docx2txtLoader, TextLoader
-from langchain.text_splitter import RecursiveCharacterTextSplitter 
-import os
+# DBTITLE 1,Import Libs
+from pypdf import PdfReader
+from typing import TypedDict, Dict
+import warnings
+import io 
+from pyspark.sql.types import StructType, StringType, StructField, MapType, ArrayType
+import pyspark.sql.functions as func
 
-def chunk_pdf_from_dir(directory:str='./docs'):
+# COMMAND ----------
 
-    documents = []
-    for file in os.listdir(directory):
-        pdf_path = os.path.join(directory, file)
-        loader = PyPDFLoader(pdf_path)
-        documents.extend(loader.load())
+# DBTITLE 1,Setup Function
+class ParserReturnValue(TypedDict):
+    doc_parsed_contents: Dict[str, str]
+    parser_status: str
+
+
+def parse_bytes_pypdf(
+    raw_doc_contents_bytes: bytes,
+) -> ParserReturnValue:
+    try:
+        pdf = io.BytesIO(raw_doc_contents_bytes)
+        reader = PdfReader(pdf)
+
+        parsed_content = [page_content.extract_text() for page_content in reader.pages]
+        output = {
+            "num_pages": str(len(parsed_content)),
+            "parsed_content": "\n".join(parsed_content),
+        }
+
+        return {
+            "doc_parsed_contents": output,
+            "parser_status": "SUCCESS",
+        }
+    except Exception as e:
+        warnings.warn(f"Exception {e} has been thrown during parsing")
+        return {
+            "doc_parsed_contents": {"num_pages": "", "parsed_content": ""},
+            "parser_status": f"ERROR: {e}",
+        }
+
+# COMMAND ----------
+
+# DBTITLE 1,Build Silver Table
+parser_udf = func.udf(
+    parse_bytes_pypdf,
+    returnType=StructType(
+        [
+            StructField(
+                "doc_parsed_contents",
+                MapType(StringType(), StringType()),
+                nullable=True,
+            ),
+            StructField("parser_status", StringType(), nullable=True),
+        ]
+    ),
+)
+
+parsed_files_df = raw_files_df.withColumn("parsing", parser_udf("content")).drop("content")
+
+parsed_files_df.write.mode("overwrite").option("overwriteSchema", "true")\
+  .saveAsTable(f'{source_catalog}.{source_schema}.{silver_table}')
+
+print(f"Parsed {parsed_files_df.count()} documents.")
+
+display(parsed_files_df)
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC # Setup the Gold Layer - Chunking
+# MAGIC
+# MAGIC With this codebase, we will chunk the documents and make them ready for loading into a Vector Index. \
+# MAGIC The best way to chunk will depend on the type of docment, it's formating and the information contained within.\
+# MAGIC
+
+# COMMAND ----------
+
+# DBTITLE 1,Setting up my chunking functions
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+class ChunkerReturnValue(TypedDict):
+    chunked_text: str
+    chunker_status: str
+
+def chunk_parsed_content_langrecchar(
+    doc_parsed_contents: str, chunk_size: int, chunk_overlap: int) -> ChunkerReturnValue:
     
-    text_splitter = RecursiveCharacterTextSplitter()
-    document_chunks = text_splitter.split_documents(documents)
+    # RecursiveCharacterTextSplitter is a basic format. There are many possible approaches
+    text_splitter = RecursiveCharacterTextSplitter(
+      chunk_size=chunk_size,
+      chunk_overlap=chunk_overlap,
+      length_function=len,
+      is_separator_regex=False,
+    )
 
-    return document_chunks
+    chunks = text_splitter.split_text(doc_parsed_contents)
 
-docs = chunk_pdf_from_dir(directory=volume_path)
-
-# COMMAND ----------
-
-# 2) setup the dataframe
-import pandas as pd
-
-decoded_docs = []
-chunk_id = 0
-for doc in docs:
-  decoded_docs.append(
-    {
-      'row_id': f"chunk_{chunk_id}",
-      'page_content': doc.page_content,
-      'source_doc': doc.metadata['source'],
-      'doc_page': doc.metadata['page']
-    }
-  )
-  chunk_id += 1
-
-pandas_frame = pd.DataFrame(decoded_docs)
-
-spk_df = spark.createDataFrame(pandas_frame)
+    return {
+            "chunked_text": [doc for doc in chunks],
+            "chunker_status": "SUCCESS",
+        }
 
 # COMMAND ----------
 
-display(spk_df)
+# DBTITLE 1,Setting up udf
+from functools import partial
+
+chunker_udf = func.udf(
+    partial(
+        chunk_parsed_content_langrecchar,
+        chunk_size=1000,
+        chunk_overlap=150
+    ),
+    returnType=StructType(
+        [
+            StructField("chunked_text", ArrayType(StringType()), nullable=True),
+            StructField("chunker_status", StringType(), nullable=True),
+        ]
+    ),
+)
 
 # COMMAND ----------
 
-spk_df.write.mode("overwrite").option("delta.enableChangeDataFeed", "true") \
-    .saveAsTable(f'{source_catalog}.{source_schema}.{source_table}')
+# Run the chunker
+chunked_files_df = parsed_files_df.withColumn(
+    "chunked",
+    chunker_udf("doc_parsed_contents.parsed_content"),
+)
+
+# Write to Delta Table
+chunked_files_df.write.mode("overwrite").option("overwriteSchema", "true").saveAsTable(
+    f'{source_catalog}.{source_schema}.{gold_table}'
+)
+
+print(f"Produced a total of {chunked_files_df.count()} chunks.")
+
+# Display without the parent document text - this is saved to the Delta Table
+display(chunked_files_df)
+
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC # Setup the Vector Search Endpoint
-
-# COMMAND ----------
-
-from databricks.vector_search.client import VectorSearchClient
-
-vsc = VectorSearchClient()
-# vs_endpoint
-vsc.get_endpoint(
-  name=vs_endpoint
-)
-
-vs_index = f"{source_table}_bge_index"
-vs_index_fullname = f"{source_catalog}.{source_schema}.{vs_index}"
-
-# COMMAND ----------
-
-# See all the indices we have
-vsc.list_indexes(name=vs_endpoint)
-
-# COMMAND ----------
-
-index = vsc.create_delta_sync_index(
-  endpoint_name=vs_endpoint,
-  source_table_name=f'{source_catalog}.{source_schema}.{source_table}',
-  index_name=vs_index_fullname,
-  pipeline_type='TRIGGERED',
-  primary_key="row_id",
-  embedding_source_column="page_content",
-  embedding_model_endpoint_name=embedding_endpoint_name
-)
-index.describe()['status']['message']
-
-# COMMAND ----------
-
-import time
-index = vsc.get_index(endpoint_name=vs_endpoint,index_name=vs_index_fullname)
-while not index.describe().get('status')['ready']:
-  print("Waiting for index to be ready...")
-  time.sleep(30)
-print("Index is ready!")
-index.describe()
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC # Similarity search
-
-# COMMAND ----------
-
-results = index.similarity_search(
-  columns=["page_content"],
-  # vs_index_fullname,
-  query_text="Tell me about tuning LLMs",
-  num_results=3
-  )
-
-# COMMAND ----------
-
-
+# MAGIC # Discussion
+# MAGIC
+# MAGIC We have now chunked and setup the files
