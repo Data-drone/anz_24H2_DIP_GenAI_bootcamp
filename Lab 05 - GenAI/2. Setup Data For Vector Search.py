@@ -2,11 +2,12 @@
 # MAGIC %md
 # MAGIC # Setting up Our Data Source
 # MAGIC
-# MAGIC This notebook helps to setup your datasets
+# MAGIC So we saw before that adding information context is key to making LLMs able to answer questions specific to your organisation \
+# MAGIC Or to add knowledge of recent events that may not be in it's training data. \
 # MAGIC
-# MAGIC You can load your own files via the UI or you can use code to load some for you.
-# MAGIC
-# MAGIC 
+# MAGIC The key to finding information, our document library for LLMs, is the Vector Search Engine \
+# MAGIC Rather than just relying on keyword search like old school document databases, Vector Search Engines can also look at the similarity of phrases \
+# MAGIC This allows us to look more at the meaning of sentences rather than just keyword search.
 
 # COMMAND ----------
 
@@ -16,7 +17,7 @@
 username = spark.sql("SELECT current_user()").first()['current_user()'].replace('@vocareum.com','')
 
 
-######### Edit these to customise location
+######### Edit these to customise location (optional)
 db_catalog = username
 db_schema = 'rag_ai_app'
 volume_name = 'source_files'
@@ -42,7 +43,7 @@ print(f"Load files manually with this link: {vol_url}")
 # MAGIC %md
 # MAGIC # Load Files with Code
 # MAGIC
-# MAGIC If you don't have any pdfs that you want to load manually then you can use this code to load some \
+# MAGIC If you don't have any pdfs that you want to load manually then you can use this code to load some from the internet\
 # MAGIC Just uncomment the last cell. 
 
 # COMMAND ----------
@@ -68,7 +69,12 @@ import os
 import requests
 user_agent = "me-me-me"
 
-def load_file(file_uri, file_name, library_folder):
+def load_file(file_uri: str, file_name: str, library_folder: str) -> None:
+    """
+
+    This function is designed to loop through the provided urls and load them to a particular folder
+
+    """
     
     # Create the local file path for saving the PDF
     local_file_path = os.path.join(library_folder, file_name)
