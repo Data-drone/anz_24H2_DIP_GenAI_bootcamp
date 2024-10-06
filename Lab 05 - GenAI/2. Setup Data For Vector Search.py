@@ -14,11 +14,13 @@
 # DBTITLE 1,Configuration Parameters
 
 # extract current username
-username = spark.sql("SELECT current_user()").first()['current_user()'].replace('@vocareum.com','')
+import re
+username = spark.sql("SELECT current_user()").first()['current_user()'].split('@')[0]
+username_processed = re.sub(r'[^\w]', '_', username)
 
 
 ######### Edit these to customise location (optional)
-db_catalog = username
+db_catalog = username_processed
 db_schema = 'rag_ai_app'
 volume_name = 'source_files'
 ##########################################
@@ -27,12 +29,14 @@ volume_name = 'source_files'
 from dbruntime.databricks_repl_context import get_context
 ctx = get_context()
 volume_folder = f'/Volumes/{db_catalog}/{db_schema}/{volume_name}/'
-vol_url = "https://{ctx.browserHostName}explore/data/volumes/{db_catalog}/{db_schema}/{volume_name}"
+vol_url = f"https://{ctx.browserHostName}explore/data/volumes/{db_catalog}/{db_schema}/{volume_name}"
 
 # COMMAND ----------
 
 # DBTITLE 1,Setup Catalog and Schema
-spark.sql(f"CREATE CATALOG IF NOT EXISTS {db_catalog}")
+
+# During the lab we will do this with click ops.
+#spark.sql(f"CREATE CATALOG IF NOT EXISTS {db_catalog}")
 spark.sql(f"CREATE SCHEMA IF NOT EXISTS {db_catalog}.{db_schema}")
 spark.sql(f"CREATE VOLUME IF NOT EXISTS {db_catalog}.{db_schema}.{volume_name}")
 
@@ -91,7 +95,7 @@ def load_file(file_uri: str, file_name: str, library_folder: str) -> None:
             # Save the PDF to the local file
             with open(local_file_path, "wb") as pdf_file:
                 pdf_file.write(response.content)
-            print("PDF downloaded successfully.")
+            print(f"PDF {file_name} downloaded successfully.")
         else:
             print(f"Failed to download PDF. Status code: {response.status_code}")
     except requests.RequestException as e:

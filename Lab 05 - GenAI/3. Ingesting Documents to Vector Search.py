@@ -10,7 +10,7 @@
 # COMMAND ----------
 
 # DBTITLE 1,Setup Libraries
-# MAGIC %pip install --upgrade --force-reinstall databricks-vectorsearch mlflow==2.16.2 langchain-databricks==0.1.0 pypdf==5.0.1
+# MAGIC %pip install --upgrade --force-reinstall databricks-vectorsearch mlflow==2.16.2 langchain-text-splitters langchain-databricks==0.1.0 pypdf==5.0.1
 # MAGIC %restart_python
 
 # COMMAND ----------
@@ -25,7 +25,9 @@
 
 # DBTITLE 1,Configure Parameters
 # We will create the following source Delta table.
-username = spark.sql("SELECT current_user()").first()['current_user()'].replace('@vocareum.com','')
+import re
+username = spark.sql("SELECT current_user()").first()['current_user()'].split('@')[0]
+username_processed = re.sub(r'[^\w]', '_', username)
 
 # UC location
 source_catalog = username
@@ -149,7 +151,9 @@ parser_udf = func.udf(
     ),
 )
 
-parsed_files_df = raw_files_df.withColumn("parsing", parser_udf("content")).drop("content")
+parsed_files_staging_df = raw_files_df.withColumn("parsing", parser_udf("content")).drop("content")
+
+parsed_files_df = parsed_files_staging_df.withColumn("doc_parsed_contents", func.col("parsing.doc_parsed_contents")).drop("parsing")
 
 parsed_files_df.write.mode("overwrite").option("overwriteSchema", "true")\
   .saveAsTable(f'{source_catalog}.{source_schema}.{silver_table}')
@@ -221,6 +225,12 @@ chunked_files_df = parsed_files_df.withColumn(
     chunker_udf("doc_parsed_contents.parsed_content"),
 )
 
+chunked_files_df = chunked_files_df.select(
+    "path",
+    func.explode("chunked.chunked_text").alias("chunked_text"),
+    func.md5(func.col("chunked_text")).alias("chunk_id")
+)
+
 # Write to Delta Table
 chunked_files_df.write.mode("overwrite").option("overwriteSchema", "true").saveAsTable(
     f'{source_catalog}.{source_schema}.{gold_table}'
@@ -231,10 +241,17 @@ print(f"Produced a total of {chunked_files_df.count()} chunks.")
 # Display without the parent document text - this is saved to the Delta Table
 display(chunked_files_df)
 
+# COMMAND ----------
+
+# Prep table for indexing
+spark.sql(f"""ALTER TABLE {source_catalog}.{source_schema}.{gold_table}
+            SET TBLPROPERTIES (delta.enableChangeDataFeed = true)""")  
 
 # COMMAND ----------
 
 # MAGIC %md
 # MAGIC # Discussion
 # MAGIC
-# MAGIC We have now chunked and setup the files
+# MAGIC We have now chunked and setup the files\
+# MAGIC Now that the table is ready, we can create a vector index on top of it
+# MAGIC
