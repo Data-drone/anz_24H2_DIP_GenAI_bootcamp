@@ -29,7 +29,7 @@ volume_name = 'source_files'
 from dbruntime.databricks_repl_context import get_context
 ctx = get_context()
 volume_folder = f'/Volumes/{db_catalog}/{db_schema}/{volume_name}/'
-vol_url = f"https://{ctx.browserHostName}explore/data/volumes/{db_catalog}/{db_schema}/{volume_name}"
+vol_url = f"https://{ctx.browserHostName}/explore/data/volumes/{db_catalog}/{db_schema}/{volume_name}"
 
 # COMMAND ----------
 
@@ -109,7 +109,3 @@ def load_file(file_uri: str, file_name: str, library_folder: str) -> None:
 ########## Uncomment to run (Optional)
 #for pdf in pdfs.keys():
 #    load_file(pdfs[pdf], pdf, volume_folder)
-
-
-
-

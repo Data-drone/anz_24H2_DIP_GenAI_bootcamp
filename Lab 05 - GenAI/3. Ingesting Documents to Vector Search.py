@@ -30,7 +30,7 @@ username = spark.sql("SELECT current_user()").first()['current_user()'].split('@
 username_processed = re.sub(r'[^\w]', '_', username)
 
 # UC location
-source_catalog = username
+source_catalog = username_processed
 source_schema = "rag_ai_app"
 
 # table naming

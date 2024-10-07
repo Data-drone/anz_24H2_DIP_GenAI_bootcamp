@@ -60,6 +60,8 @@ def eval_pipe(inputs):
 # COMMAND ----------
 
 # DBTITLE 1,Log and version our model
+mlflow.set_registry_uri('databricks-uc')
+
 with mlflow.start_run(run_name='Rag_chain'):
 
     mlflow.set_tag("type", "chain")
@@ -111,6 +113,7 @@ print(instructions_to_reviewer)
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.serving import EndpointStateReady, EndpointStateConfigUpdate
 from databricks.sdk.errors import NotFound, ResourceDoesNotExist
+import time
 
 w = WorkspaceClient()
 
