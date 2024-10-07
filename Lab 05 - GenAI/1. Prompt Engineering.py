@@ -16,7 +16,7 @@
 
 # DBTITLE 1,Library Setup
 # MAGIC %pip install -U mlflow==2.16.2 langchain-databricks==0.1.0
-# MAGIC %restart_python
+# MAGIC dbutils.library.restartPython()
 
 # COMMAND ----------
 

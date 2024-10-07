@@ -15,9 +15,9 @@
 
 # COMMAND ----------
 
-# DBTITLE 1,Install Libs
+# DBTITLE 1,Install Libraries
 # MAGIC %pip install -U  mlflow==2.16.2 langchain==0.2.16 langchain_community==0.2.17 langchain-databricks==0.1.0
-# MAGIC %restart_python
+# MAGIC dbutils.library.restartPython()
 
 # COMMAND ----------
 
@@ -36,13 +36,13 @@ endpoint_name = 'brian_endpoint'
 vs_index_fullname = f"{db_catalog}.{db_schema}.{vs_index_name}"
 
 # temp need to change later
-embedding_model = "databricks-gte-large-en"
 chat_model = "databricks-meta-llama-3-1-70b-instruct"
 
 # COMMAND ----------
 
 # DBTITLE 1,Load Instruction Finetuned Model
-from langchain_databricks import ChatDatabricks
+#from langchain_databricks import ChatDatabricks
+from langchain_community.chat_models import ChatDatabricks
 
 llm_model = ChatDatabricks(
             target_uri='databricks',
@@ -55,18 +55,10 @@ llm_model.invoke("Hello")
 
 # COMMAND ----------
 
-# DBTITLE 1,Load Embedding Model
-from langchain_databricks import DatabricksEmbeddings
-
-embeddings = DatabricksEmbeddings(endpoint=embedding_model)
-
-embeddings.embed_query("Embed my test question")
-
-# COMMAND ----------
-
 # DBTITLE 1,Load DB Vector Store
 from databricks.vector_search.client import VectorSearchClient
-from langchain_databricks import DatabricksVectorSearch
+#from langchain_databricks import DatabricksVectorSearch
+from langchain_community.vectorstores import DatabricksVectorSearch
 
 vsc = VectorSearchClient()
 index = vsc.get_index(endpoint_name=endpoint_name,
@@ -78,7 +70,7 @@ index.similarity_search(columns=["chunked_text"],query_text="Tell me about tunin
 
 # DBTITLE 1,Build Retrieval Chain
 retriever = DatabricksVectorSearch(
-    vs_index_fullname,  
+    index,  
     columns=["path"]
 ).as_retriever()
 

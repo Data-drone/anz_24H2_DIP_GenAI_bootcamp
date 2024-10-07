@@ -10,7 +10,7 @@
 
 # DBTITLE 1,Run Pip Install
 # MAGIC %pip install -U databricks-agents databricks-sdk mlflow==2.16.2 langchain==0.2.16 langchain_community==0.2.17 langchain-databricks==0.1.0 tiktoken
-# MAGIC %restart_python
+# MAGIC dbutils.library.restartPython()
 
 # COMMAND ----------
 
@@ -45,17 +45,7 @@ evaluations = pd.DataFrame(
     ]}
 )
 
-# Eval Function for mlflow evals
-def eval_pipe(inputs):
-
-        def invoke_chain(prompt):
-            return chain.invoke(input={"messages": [
-             {"role": "user", "content": prompt}
-        ]})
-
-        answers = inputs['request'].apply(invoke_chain)
-        #answer = chain.invoke(context="", data=inputs)
-        return answers.tolist()
+display(evaluations)
 
 # COMMAND ----------
 
@@ -73,17 +63,16 @@ with mlflow.start_run(run_name='Rag_chain'):
         artifact_path="chain",  # Required by MLflow
         input_example={"messages": [
              {"role": "user", "content": "Why do I need RAG techniques?"}
-        ]},  # Save the chain's input schema.  MLflow will execute the chain before logging & capture it's output schema.
-        registered_model_name=f'{db_catalog}.{db_schema}.retrieval_chain_model_file'
+        ]}
     )
 
     chain = mlflow.langchain.load_model(logged_chain_info.model_uri)
 
     # Setting it to Databricks Agent sets it up to use our custom designed
     # LLM-as-a-Judge stack
-    results = mlflow.evaluate(eval_pipe,
+    results = mlflow.evaluate(logged_chain_info.model_uri,
                           data=evaluations,
-                          model_type='text')
+                          model_type='databricks-agent')
 
 # COMMAND ----------
 
@@ -109,6 +98,12 @@ print(instructions_to_reviewer)
 
 # COMMAND ----------
 
+# DBTITLE 1,Register Model to Unity Catalog
+uc_registered_model_info = mlflow.register_model(model_uri=logged_chain_info.model_uri, 
+                                                 name=f'{db_catalog}.{db_schema}.retrieval_chain_model_file')
+
+# COMMAND ----------
+
 # DBTITLE 1,Deploy Review App
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.serving import EndpointStateReady, EndpointStateConfigUpdate
@@ -119,7 +114,7 @@ w = WorkspaceClient()
 
 # Deploy to enable the Review APP and create an API endpoint
 deployment_info = agents.deploy(model_name=f'{db_catalog}.{db_schema}.retrieval_chain_model_file', 
-                                model_version=logged_chain_info.registered_model_version)
+                                model_version=uc_registered_model_info.version)
 
 browser_url = mlflow.utils.databricks_utils.get_browser_hostname()
 print(f"\n\nView deployment status: https://{browser_url}/ml/endpoints/{deployment_info.endpoint_name}")

@@ -7,7 +7,7 @@
 
 # DBTITLE 1,Install Libs
 # MAGIC %pip install --upgrade --force-reinstall databricks-vectorsearch mlflow==2.16.2 langchain-databricks==0.1.0
-# MAGIC %restart_python
+# MAGIC dbutils.library.restartPython()
 
 # COMMAND ----------
 
